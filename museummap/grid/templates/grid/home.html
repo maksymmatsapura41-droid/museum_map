@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>My Grid</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+
+        canvas {
+            border: 1px solid black;
+            display: block;
+            margin-bottom: 12px;
+        }
+
+        #output {
+            font-size: 18px;
+            margin-top: 10px;
+            margin-bottom: 12px;
+        }
+
+        #commentsBox {
+            margin-top: 16px;
+            padding: 12px;
+            border: 1px solid #ccc;
+            width: 600px;
+            min-height: 80px;
+        }
+
+        button {
+            padding: 8px 12px;
+            cursor: pointer;
+        }
+
+        ul {
+            padding-left: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>My clickable grid</h1>
+
+    <canvas id="gridCanvas" width="600" height="600"></canvas>
+    <div id="output">Click a square</div>
+    <button id="saveButton">Add comment to selected square</button>
+
+    <div id="commentsBox">
+        <strong>Comments for selected square:</strong>
+        <ul id="commentsList">
+            <li>No square selected yet.</li>
+        </ul>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gridCanvas");
+        const ctx = canvas.getContext("2d");
+        const output = document.getElementById("output");
+        const saveButton = document.getElementById("saveButton");
+        const commentsList = document.getElementById("commentsList");
+
+        const gridSize = 20;
+        const cellSize = canvas.width / gridSize;
+
+        let selectedRow = null;
+        let selectedCol = null;
+
+        function getCoordinateLabel(row, col) {
+            const letter = String.fromCharCode(65 + col);
+            const number = row + 1;
+            return `${letter}${number}`;
+        }
+
+        function drawGrid() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if (selectedRow !== null && selectedCol !== null) {
+                ctx.fillStyle = "rgba(0, 100, 255, 0.25)";
+                ctx.fillRect(
+                    selectedCol * cellSize,
+                    selectedRow * cellSize,
+                    cellSize,
+                    cellSize
+                );
+            }
+
+            ctx.strokeStyle = "black";
+
+            for (let i = 0; i <= gridSize; i++) {
+                ctx.beginPath();
+                ctx.moveTo(i * cellSize, 0);
+                ctx.lineTo(i * cellSize, canvas.height);
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.moveTo(0, i * cellSize);
+                ctx.lineTo(canvas.width, i * cellSize);
+                ctx.stroke();
+            }
+        }
+
+        function renderComments(comments) {
+            commentsList.innerHTML = "";
+
+            if (comments.length === 0) {
+                const li = document.createElement("li");
+                li.textContent = "No comments yet for this square.";
+                commentsList.appendChild(li);
+                return;
+            }
+
+            comments.forEach(comment => {
+                const li = document.createElement("li");
+                li.textContent = comment.text;
+                const delBtn = document.createElement("button");
+                delBtn.type = "button"
+                delBtn.className = "delete";
+                delBtn.textContent = "Delete";
+                commentsList.appendChild(li);
+                delBtn.addEventListener("click", () => {
+                deleteComment(comment.id);
+                    });
+                    li.appendChild(delBtn);
+                }
+            });
+        }
+        async function deleteComment(id) {
+            if (!confirm("Delete this comment?")) {
+                return;
+            }
+            const response = await fetch("/delete-comment/", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ id: id }),
+            });
+            let data = {};
+            try {
+                data = await response.json();
+            } catch (_) {
+                data = {};
+            }
+            if (response.ok) {
+                if (selectedRow !== null && selectedCol !== null) {
+                    await loadComments(selectedRow, selectedCol);
+                }
+            } else {
+                output.textContent = `Error: ${data.error || response.statusText}`;
+            }
+        }
+
+        async function loadComments(row, col) {
+            const response = await fetch(`/get-comments/?row=${row}&col=${col}`);
+            const data = await response.json();
+
+            if (response.ok) {
+                renderComments(data.comments);
+            } else {
+                commentsList.innerHTML = "<li>Error loading comments.</li>";
+            }
+        }
+
+        canvas.addEventListener("click", async function(event) {
+            const rect = canvas.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+
+            const col = Math.floor(x / cellSize);
+            const row = Math.floor(y / cellSize);
+
+            if (row >= 0 && row < gridSize && col >= 0 && col < gridSize) {
+                selectedRow = row;
+                selectedCol = col;
+
+                const coordinate = getCoordinateLabel(row, col);
+                output.textContent = `You selected: ${coordinate}`;
+
+                drawGrid();
+                loadComments(row, col);
+            }
+        });
+
+        saveButton.addEventListener("click", async function() {
+            if (selectedRow === null || selectedCol === null) {
+                alert("Please click a square first.");
+                return;
+            }
+
+            const comment = prompt("Enter a comment for this square:");
+
+            if (!comment) {
+                return;
+            }
+
+            const response = await fetch("/save-comment/", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    row: selectedRow,
+                    col: selectedCol,
+                    text: comment
+                })
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                const coordinate = getCoordinateLabel(selectedRow, selectedCol);
+                output.textContent = `Saved comment for ${coordinate}: ${comment}`;
+                loadComments(selectedRow, selectedCol);
+            } else {
+                output.textContent = `Error: ${data.error}`;
+            }
+        });
+
+        drawGrid();
+    </script>
+</body>
+</html>
