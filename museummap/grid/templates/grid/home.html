@@ -20,7 +20,7 @@
             margin-bottom: 12px;
         }
 
-        #commentsBox {
+        #commentsBox, #drawingBox, #routesBox, #sharedBox, #sharedDetailBox {
             margin-top: 16px;
             padding: 12px;
             border: 1px solid #ccc;
@@ -28,22 +28,41 @@
             min-height: 80px;
         }
 
+        #drawingCanvas {
+            border: 1px solid #999;
+            display: block;
+            margin-top: 12px;
+            margin-bottom: 12px;
+            background: white;
+            touch-action: none;
+        }
+
         button {
             padding: 8px 12px;
             cursor: pointer;
+            margin-right: 8px;
+            margin-top: 8px;
         }
 
         ul {
             padding-left: 20px;
         }
+
+        li {
+            margin-bottom: 8px;
+        }
     </style>
 </head>
 <body>
-    <h1>My clickable grid</h1>
+    <h1>Room 1</h1>
 
     <canvas id="gridCanvas" width="600" height="600"></canvas>
     <div id="output">Click a square</div>
+
     <button id="saveButton">Add comment to selected square</button>
+    <button id="startRouteButton">Start route</button>
+    <button id="finishRouteButton">Finish route</button>
+    <button id="cancelRouteButton">Cancel route</button>
 
     <div id="commentsBox">
         <strong>Comments for selected square:</strong>
@@ -52,12 +71,59 @@
         </ul>
     </div>
 
-    <script>
+    <div id="drawingBox">
+        <strong>Sketch for selected square:</strong>
+        <canvas id="drawingCanvas" width="300" height="200"></canvas>
+        <div>
+            <button id="clearDrawingButton">Clear sketch</button>
+            <button id="saveDrawingButton">Save sketch</button>
+        </div>
+        <ul id="drawingList">
+            <li>No drawings loaded for this square.</li>
+        </ul>
+    </div>
+
+    <div id="routesBox">
+        <strong>Saved routes:</strong>
+        <ul id="routesList">
+            <li>No routes yet.</li>
+        </ul>
+    </div>
+
+    <div id="sharedBox">
+        <strong>Shared coordinates:</strong>
+        <ul id="sharedList">
+            <li>No shared coordinates yet.</li>
+        </ul>
+    </div>
+
+    <div id="sharedDetailBox">
+        <strong>Routes using selected shared coordinate:</strong>
+        <ul id="sharedDetailList">
+            <li>Click a shared coordinate to see its routes.</li>
+        </ul>
+    </div>
+
+    <script type="module">
+        import { getStroke } from "https://cdn.jsdelivr.net/npm/perfect-freehand@1.2.3/dist/esm/index.mjs";
+
         const canvas = document.getElementById("gridCanvas");
         const ctx = canvas.getContext("2d");
         const output = document.getElementById("output");
         const saveButton = document.getElementById("saveButton");
+        const startRouteButton = document.getElementById("startRouteButton");
+        const finishRouteButton = document.getElementById("finishRouteButton");
+        const cancelRouteButton = document.getElementById("cancelRouteButton");
         const commentsList = document.getElementById("commentsList");
+        const routesList = document.getElementById("routesList");
+        const sharedList = document.getElementById("sharedList");
+        const sharedDetailList = document.getElementById("sharedDetailList");
+
+        const drawingCanvas = document.getElementById("drawingCanvas");
+        const drawingCtx = drawingCanvas.getContext("2d");
+        const clearDrawingButton = document.getElementById("clearDrawingButton");
+        const saveDrawingButton = document.getElementById("saveDrawingButton");
+        const drawingList = document.getElementById("drawingList");
 
         const gridSize = 20;
         const cellSize = canvas.width / gridSize;
@@ -65,7 +131,21 @@
         let selectedRow = null;
         let selectedCol = null;
 
+        let routeMode = false;
+        let currentRouteSquares = [];
+        let displayedRouteSquares = [];
+
+        let currentStroke = [];
+        let allStrokes = [];
+        let isDrawing = false;
+
         function getCoordinateLabel(row, col) {
+            const letter = String.fromCharCode(65 + col);
+            const number = row + 1;
+            return `${letter}${number}`;
+        }
+
+        function coordinateLabelFromRowCol(row, col) {
             const letter = String.fromCharCode(65 + col);
             const number = row + 1;
             return `${letter}${number}`;
@@ -73,6 +153,26 @@
 
         function drawGrid() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            displayedRouteSquares.forEach(square => {
+                ctx.fillStyle = "rgba(255, 165, 0, 0.25)";
+                ctx.fillRect(
+                    square.col * cellSize,
+                    square.row * cellSize,
+                    cellSize,
+                    cellSize
+                );
+            });
+
+            currentRouteSquares.forEach(square => {
+                ctx.fillStyle = "rgba(0, 200, 0, 0.25)";
+                ctx.fillRect(
+                    square.col * cellSize,
+                    square.row * cellSize,
+                    cellSize,
+                    cellSize
+                );
+            });
 
             if (selectedRow !== null && selectedCol !== null) {
                 ctx.fillStyle = "rgba(0, 100, 255, 0.25)";
@@ -112,35 +212,35 @@
             comments.forEach(comment => {
                 const li = document.createElement("li");
                 li.textContent = comment.text;
+
                 const delBtn = document.createElement("button");
-                delBtn.type = "button"
-                delBtn.className = "delete";
+                delBtn.type = "button";
                 delBtn.textContent = "Delete";
-                commentsList.appendChild(li);
+
                 delBtn.addEventListener("click", () => {
-                deleteComment(comment.id);
-                    });
-                    li.appendChild(delBtn);
-                }
+                    deleteComment(comment.id);
+                });
+
+                li.appendChild(delBtn);
+                commentsList.appendChild(li);
             });
         }
+
         async function deleteComment(id) {
             if (!confirm("Delete this comment?")) {
                 return;
             }
+
             const response = await fetch("/delete-comment/", {
                 method: "POST",
                 headers: {
-                    "Content-Type": "application/json",
+                    "Content-Type": "application/json"
                 },
-                body: JSON.stringify({ id: id }),
+                body: JSON.stringify({ id: id })
             });
-            let data = {};
-            try {
-                data = await response.json();
-            } catch (_) {
-                data = {};
-            }
+
+            const data = await response.json();
+
             if (response.ok) {
                 if (selectedRow !== null && selectedCol !== null) {
                     await loadComments(selectedRow, selectedCol);
@@ -155,10 +255,262 @@
             const data = await response.json();
 
             if (response.ok) {
-                renderComments(data.comments);
+                renderComments(data.comments || []);
             } else {
                 commentsList.innerHTML = "<li>Error loading comments.</li>";
             }
+        }
+
+        async function loadRoutes() {
+            const response = await fetch("/get-routes/");
+            const data = await response.json();
+
+            routesList.innerHTML = "";
+
+            if (!response.ok) {
+                routesList.innerHTML = "<li>Error loading routes.</li>";
+                return;
+            }
+
+            if (!data.routes || data.routes.length === 0) {
+                routesList.innerHTML = "<li>No routes yet.</li>";
+                return;
+            }
+
+            data.routes.forEach(route => {
+                const li = document.createElement("li");
+                const btn = document.createElement("button");
+
+                btn.textContent = route.title;
+                btn.addEventListener("click", () => {
+                    loadRouteDetail(route.id);
+                });
+
+                li.appendChild(btn);
+                routesList.appendChild(li);
+            });
+        }
+
+        async function loadRouteDetail(routeId) {
+            const response = await fetch(`/get-route/${routeId}/`);
+            const data = await response.json();
+
+            if (response.ok) {
+                displayedRouteSquares = data.points.map(point => ({
+                    row: point.row,
+                    col: point.col
+                }));
+                output.textContent = `Loaded route: ${data.title}`;
+                drawGrid();
+            } else {
+                output.textContent = `Error: ${data.error}`;
+            }
+        }
+
+        async function loadSharedCoordinates() {
+            const response = await fetch("/shared-coordinates/");
+            const data = await response.json();
+
+            sharedList.innerHTML = "";
+
+            if (!response.ok) {
+                sharedList.innerHTML = "<li>Error loading shared coordinates.</li>";
+                return;
+            }
+
+            if (!data.shared_coordinates || data.shared_coordinates.length === 0) {
+                sharedList.innerHTML = "<li>No shared coordinates yet.</li>";
+                return;
+            }
+
+            data.shared_coordinates.forEach(item => {
+                const li = document.createElement("li");
+                const btn = document.createElement("button");
+
+                const label = coordinateLabelFromRowCol(item.row, item.col);
+                btn.textContent = `${label} — appears in ${item.route_count} routes`;
+
+                btn.addEventListener("click", () => {
+                    loadSharedCoordinateDetail(item.row, item.col);
+                });
+
+                li.appendChild(btn);
+                sharedList.appendChild(li);
+            });
+        }
+
+        async function loadSharedCoordinateDetail(row, col) {
+            const response = await fetch(`/shared-coordinate-detail/?row=${row}&col=${col}`);
+            const data = await response.json();
+
+            sharedDetailList.innerHTML = "";
+
+            if (!response.ok) {
+                sharedDetailList.innerHTML = "<li>Error loading shared coordinate detail.</li>";
+                return;
+            }
+
+            if (!data.routes || data.routes.length === 0) {
+                sharedDetailList.innerHTML = "<li>No routes found for this coordinate.</li>";
+                return;
+            }
+
+            const coordLabel = coordinateLabelFromRowCol(row, col);
+            output.textContent = `Shared coordinate selected: ${coordLabel}`;
+
+            data.routes.forEach(route => {
+                const li = document.createElement("li");
+                li.textContent = `${route.title} (step ${route.order})`;
+                sharedDetailList.appendChild(li);
+            });
+
+            displayedRouteSquares = [{ row, col }];
+            drawGrid();
+        }
+
+        function resetRouteMode(message = "Route cancelled.") {
+            routeMode = false;
+            currentRouteSquares = [];
+            output.textContent = message;
+            drawGrid();
+        }
+
+        function clearDrawingCanvas() {
+            drawingCtx.clearRect(0, 0, drawingCanvas.width, drawingCanvas.height);
+        }
+
+        function drawStrokeOnCanvas(ctx, points) {
+            const outlinePoints = getStroke(points, {
+                size: 8,
+                thinning: 0.6,
+                smoothing: 0.5,
+                streamline: 0.5,
+                simulatePressure: true
+            });
+
+            if (!outlinePoints.length) return;
+
+            ctx.beginPath();
+            ctx.moveTo(outlinePoints[0][0], outlinePoints[0][1]);
+
+            for (let i = 1; i < outlinePoints.length; i++) {
+                ctx.lineTo(outlinePoints[i][0], outlinePoints[i][1]);
+            }
+
+            ctx.closePath();
+            ctx.fillStyle = "black";
+            ctx.fill();
+        }
+
+        function redrawAllStrokes() {
+            clearDrawingCanvas();
+            allStrokes.forEach(stroke => {
+                drawStrokeOnCanvas(drawingCtx, stroke);
+            });
+            if (currentStroke.length) {
+                drawStrokeOnCanvas(drawingCtx, currentStroke);
+            }
+        }
+
+        function getStrokeBounds(strokes) {
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+
+            strokes.forEach(stroke => {
+                stroke.forEach(point => {
+                    const x = point[0];
+                    const y = point[1];
+
+                    if (x < minX) minX = x;
+                    if (y < minY) minY = y;
+                    if (x > maxX) maxX = x;
+                    if (y > maxY) maxY = y;
+                });
+            });
+
+            if (minX === Infinity) {
+                return { minX: 0, minY: 0, maxX: 1, maxY: 1 };
+            }
+
+            return { minX, minY, maxX, maxY };
+        }
+
+        function scaleStrokeData(strokes, targetWidth, targetHeight, padding = 10) {
+            const bounds = getStrokeBounds(strokes);
+            const drawingWidth = bounds.maxX - bounds.minX || 1;
+            const drawingHeight = bounds.maxY - bounds.minY || 1;
+
+            const scaleX = (targetWidth - padding * 2) / drawingWidth;
+            const scaleY = (targetHeight - padding * 2) / drawingHeight;
+            const scale = Math.min(scaleX, scaleY);
+
+            return strokes.map(stroke =>
+                stroke.map(point => {
+                    const x = (point[0] - bounds.minX) * scale + padding;
+                    const y = (point[1] - bounds.minY) * scale + padding;
+                    const pressure = point[2] || 0.5;
+                    return [x, y, pressure];
+                })
+            );
+        }
+
+        function createDrawingThumbnail(strokeData, width = 100, height = 100) {
+            const thumbCanvas = document.createElement("canvas");
+            thumbCanvas.width = width;
+            thumbCanvas.height = height;
+            thumbCanvas.style.border = "1px solid #999";
+            thumbCanvas.style.background = "white";
+            thumbCanvas.style.display = "block";
+            thumbCanvas.style.marginBottom = "8px";
+
+            const thumbCtx = thumbCanvas.getContext("2d");
+            const scaledStrokes = scaleStrokeData(strokeData, width, height);
+
+            scaledStrokes.forEach(stroke => {
+                drawStrokeOnCanvas(thumbCtx, stroke);
+            });
+
+            return thumbCanvas;
+        }
+
+        async function loadDrawings(row, col) {
+            const response = await fetch(`/get-drawings/?row=${row}&col=${col}`);
+            const data = await response.json();
+
+            drawingList.innerHTML = "";
+            allStrokes = [];
+            currentStroke = [];
+            clearDrawingCanvas();
+
+            if (!response.ok) {
+                drawingList.innerHTML = "<li>Error loading drawings.</li>";
+                return;
+            }
+
+            if (!data.drawings || data.drawings.length === 0) {
+                drawingList.innerHTML = "<li>No drawings loaded for this square.</li>";
+                return;
+            }
+
+            data.drawings.forEach(drawing => {
+                const li = document.createElement("li");
+                li.style.listStyle = "none";
+                li.style.marginBottom = "16px";
+                li.style.padding = "8px";
+                li.style.border = "1px solid #ddd";
+                li.style.width = "120px";
+
+                const thumb = createDrawingThumbnail(drawing.stroke_data, 100, 100);
+                li.appendChild(thumb);
+
+                const caption = document.createElement("div");
+                caption.textContent = drawing.caption || `Drawing ${drawing.id}`;
+                li.appendChild(caption);
+
+                drawingList.appendChild(li);
+            });
         }
 
         canvas.addEventListener("click", async function(event) {
@@ -174,10 +526,125 @@
                 selectedCol = col;
 
                 const coordinate = getCoordinateLabel(row, col);
-                output.textContent = `You selected: ${coordinate}`;
 
+                if (routeMode) {
+                    const alreadyAdded = currentRouteSquares.some(
+                        square => square.row === row && square.col === col
+                    );
+
+                    if (!alreadyAdded) {
+                        currentRouteSquares.push({ row, col });
+                        output.textContent = `Added ${coordinate} to current route`;
+                    } else {
+                        output.textContent = `${coordinate} is already in this route`;
+                    }
+
+                    drawGrid();
+                    return;
+                }
+
+                output.textContent = `You selected: ${coordinate}`;
                 drawGrid();
-                loadComments(row, col);
+                await loadComments(row, col);
+                await loadDrawings(row, col);
+            }
+        });
+
+        drawingCanvas.addEventListener("pointerdown", (event) => {
+            if (selectedRow === null || selectedCol === null) {
+                alert("Please select a square first.");
+                return;
+            }
+
+            isDrawing = true;
+            currentStroke = [];
+
+            const rect = drawingCanvas.getBoundingClientRect();
+            currentStroke.push([
+                event.clientX - rect.left,
+                event.clientY - rect.top,
+                event.pressure || 0.5
+            ]);
+
+            drawingCanvas.setPointerCapture(event.pointerId);
+            redrawAllStrokes();
+        });
+
+        drawingCanvas.addEventListener("pointermove", (event) => {
+            if (!isDrawing) return;
+
+            const rect = drawingCanvas.getBoundingClientRect();
+            currentStroke.push([
+                event.clientX - rect.left,
+                event.clientY - rect.top,
+                event.pressure || 0.5
+            ]);
+
+            redrawAllStrokes();
+        });
+
+        function finishCurrentStroke() {
+            if (!isDrawing) return;
+            isDrawing = false;
+
+            if (currentStroke.length) {
+                allStrokes.push(currentStroke);
+                currentStroke = [];
+                redrawAllStrokes();
+            }
+        }
+
+        drawingCanvas.addEventListener("pointerup", finishCurrentStroke);
+        drawingCanvas.addEventListener("pointercancel", finishCurrentStroke);
+        drawingCanvas.addEventListener("pointerleave", () => {
+            if (isDrawing) {
+                finishCurrentStroke();
+            }
+        });
+
+        clearDrawingButton.addEventListener("click", function() {
+            currentStroke = [];
+            allStrokes = [];
+            clearDrawingCanvas();
+            drawingList.innerHTML = "<li>Sketch cleared locally. Save if you want to keep a new one.</li>";
+        });
+
+        saveDrawingButton.addEventListener("click", async function() {
+            if (selectedRow === null || selectedCol === null) {
+                alert("Please select a square first.");
+                return;
+            }
+
+            if (allStrokes.length === 0) {
+                alert("Draw something first.");
+                return;
+            }
+
+            const caption = prompt("Optional caption for this sketch:") || "";
+
+            const response = await fetch("/save-drawing/", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    row: selectedRow,
+                    col: selectedCol,
+                    stroke_data: allStrokes,
+                    caption: caption
+                })
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                output.textContent = "Sketch saved.";
+                currentStroke = [];
+                allStrokes = [];
+                clearDrawingCanvas();
+                await loadDrawings(selectedRow, selectedCol);
+            } else {
+                output.textContent = `Error: ${data.error || "Could not save drawing."}`;
             }
         });
 
@@ -210,13 +677,75 @@
             if (response.ok) {
                 const coordinate = getCoordinateLabel(selectedRow, selectedCol);
                 output.textContent = `Saved comment for ${coordinate}: ${comment}`;
-                loadComments(selectedRow, selectedCol);
+                await loadComments(selectedRow, selectedCol);
             } else {
                 output.textContent = `Error: ${data.error}`;
             }
         });
 
+        startRouteButton.addEventListener("click", function() {
+            routeMode = true;
+            currentRouteSquares = [];
+            displayedRouteSquares = [];
+            output.textContent = "Route mode started. Click squares to add them.";
+            drawGrid();
+        });
+
+        finishRouteButton.addEventListener("click", async function() {
+            if (!routeMode) {
+                output.textContent = "You are not currently making a route.";
+                return;
+            }
+
+            if (currentRouteSquares.length === 0) {
+                resetRouteMode("No squares were added. Route cancelled.");
+                return;
+            }
+
+            const title = prompt("Enter a title for this route:");
+
+            if (!title || !title.trim()) {
+                resetRouteMode("Route not saved.");
+                return;
+            }
+
+            const description = prompt("Enter a description (optional):") || "";
+
+            const response = await fetch("/save-route/", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    title: title.trim(),
+                    description: description,
+                    squares: currentRouteSquares
+                })
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                routeMode = false;
+                displayedRouteSquares = [...currentRouteSquares];
+                currentRouteSquares = [];
+                output.textContent = `Saved route: ${data.title}`;
+                await loadRoutes();
+                await loadSharedCoordinates();
+                drawGrid();
+            } else {
+                output.textContent = `Error saving route: ${data.error || "Unknown error"}`;
+                resetRouteMode("Route save failed.");
+            }
+        });
+
+        cancelRouteButton.addEventListener("click", function() {
+            resetRouteMode();
+        });
+
         drawGrid();
+        loadRoutes();
+        loadSharedCoordinates();
     </script>
 </body>
 </html>
